@@ -1,12 +1,4 @@
-# Core dependencies
-streamlit==1.31.1
-yfinance==0.2.36
-pandas==2.2.0
-numpy==1.26.3
-
-# Plotting
-plotly==5.18.0
-
-# Data handling
-python-dateutil==2.8.2
-pytz==2024.1
+streamlit>=1.24.0
+yfinance>=0.2.18
+pandas>=1.5.3
+numpy>=1.24.3
