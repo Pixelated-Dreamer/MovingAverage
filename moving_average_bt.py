@@ -4,6 +4,8 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 
+st.set_page_config( layout = "wide" ) 
+
 def fetch_stock_data( ticker, start_date, end_date ):
     """Fetch stock data from Yahoo Finance."""
     try:
