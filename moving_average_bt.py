@@ -3,8 +3,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-
-st.set_page_config( layout = "wide" ) 
+st.set_page_config( layout = "wide" )
 
 def fetch_stock_data( ticker, start_date, end_date ):
     """Fetch stock data from Yahoo Finance."""
@@ -16,7 +15,7 @@ def fetch_stock_data( ticker, start_date, end_date ):
         st.error( f"Error fetching data for { ticker }: { str( e ) }" )
         return None
 
-def calculate_signals( data, short_window, long_window ):
+def calculate_signals( data, short_window, long_window, initial_investment ):
     """Calculate moving average signals with dates."""
     data[ 'short_ma' ] = data[ 'Close' ].rolling( window = short_window ).mean()
     data[ 'long_ma' ] = data[ 'Close' ].rolling( window = long_window ).mean()
@@ -24,18 +23,26 @@ def calculate_signals( data, short_window, long_window ):
     # Generate signals
     data[ 'signal' ] = np.where( data[ 'short_ma' ] > data[ 'long_ma' ], 'BUY', 'SELL' )
     
-    # Detect signal changes
-    data[ 'signal_change' ] = data[ 'signal' ] != data[ 'signal' ].shift( 1 )
-    signal_dates = data[data[ 'signal_change' ]].index
-    
+    # Track portfolio value
+    current_value = initial_investment
     signals_with_dates = []
-    for date in signal_dates:
-        signals_with_dates.append({
-            'date': date.strftime( '%Y-%m-%d' ),
-            'signal': data.loc[date, 'signal'],
-            'price': data.loc[date, 'Close']
-        })
     
+    for i in range( len( data ) ):
+        if i > 0:  # Skip first day since we can't calculate returns yet
+            prev_price = data[ 'Close' ].iloc[ i - 1 ]
+            price_change = ( data[ 'Close' ].iloc[ i ] - prev_price ) / prev_price
+            if data[ 'signal' ].iloc[ i - 1 ] == 'BUY':
+                current_value *= ( 1 + price_change )
+            else:
+                current_value *= ( 1 - price_change )
+        
+        signals_with_dates.append({
+            'date': data.index[ i ].strftime( '%Y-%m-%d' ),
+            'signal': data[ 'signal' ].iloc[ i ],
+            'price': data[ 'Close' ].iloc[ i ],
+            'portfolio_value': round( current_value, 2 )
+        })
+
     return {
         'close': data[ 'Close' ].iloc[ -1 ],
         'ma': data[ 'long_ma' ].iloc[ -1 ],
@@ -91,11 +98,19 @@ def main():
             data_dict = {}
             signals = {}
             
+            initial_investment = st.number_input(
+                "Initial Investment ($)",
+                min_value = 100,
+                max_value = 1000000,
+                value = 1000,
+                step = 100
+            )
+            
             for ticker in tickers:
                 data = fetch_stock_data( ticker, start_date, end_date )
                 if data is not None:
                     data_dict[ ticker ] = data
-                    signals[ ticker ] = calculate_signals( data, short_window, long_window )
+                    signals[ ticker ] = calculate_signals( data, short_window, long_window, initial_investment )
             
             # Signal History Tables in a row
             st.markdown( "---" )
@@ -111,8 +126,9 @@ def main():
                     
                     if signal_history:
                         df = pd.DataFrame( signal_history )
-                        df.columns = [ 'Date', 'Signal', 'Price' ]
+                        df.columns = [ 'Date', 'Signal', 'Price', 'Portfolio Value' ]
                         df[ 'Price' ] = df[ 'Price' ].round( 2 )
+                        df[ 'Portfolio Value' ] = df[ 'Portfolio Value' ].map( lambda x: f'${ x:,.2f}' )
                         
                         def color_signal( val ):
                             color = 'green' if val == 'BUY' else 'red'
@@ -122,7 +138,8 @@ def main():
                             df.style.applymap(
                                 color_signal,
                                 subset = [ 'Signal' ]
-                            )
+                            ),
+                            height = 400  # Make the table taller
                         )
                     else:
                         st.write( "No signal changes in the selected period" )
@@ -131,14 +148,6 @@ def main():
             st.markdown( "---" )
             st.subheader( "📊 Backtesting Results" )
     
-            initial_investment = st.number_input(
-                "Initial Investment ($)",
-                min_value = 100,
-                max_value = 1000000,
-                value = 1000,
-                step = 100
-            )
-            
             portfolio_results = calculate_returns( data_dict, signals, initial_investment )
             
             # Display results in a grid
@@ -194,7 +203,7 @@ def main():
                     f'{ short_window }d MA': data[ 'Close' ].rolling( window = short_window ).mean(),
                     f'{ long_window }d MA': data[ 'Close' ].rolling( window = long_window ).mean()
                 })
-                st.line_chart( chart_data )
+                st.line_chart( chart_data, height = 1000 )  # Changed from 500 to 1000
                 st.markdown( "---" )  # Add separator between charts
                     
         except Exception as e:
