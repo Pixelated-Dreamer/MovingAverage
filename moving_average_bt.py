@@ -1,43 +1,120 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import mplfinance as mpf
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 
-def load_data( ticker_symbol, start_date, end_date ):
-    """Load and clean stock data from Yahoo Finance."""
+def load_data( tickers, start_date, end_date ):
+    """Load and clean stock data for multiple tickers."""
     try:
-        # Create a Ticker object
-        ticker = yf.Ticker( ticker_symbol )
-        
-        # Download historical data
-        stock_data = ticker.history(
-            start = start_date,
-            end = end_date,
-            interval = "1d"
-        )
-        
-        if stock_data.empty:
-            return pd.DataFrame()
-        
-        # Clean and convert data types
-        stock_data = stock_data.copy()
-        
-        # Convert price columns to float
-        for column in [ "Open", "High", "Low", "Close" ]:
-            stock_data[ column ] = pd.to_numeric( stock_data[ column ], errors = 'coerce' )
-        
-        # Convert Volume to integer
-        stock_data[ "Volume" ] = pd.to_numeric( stock_data[ "Volume" ], errors = 'coerce' ).fillna( 0 ).astype( int )
-        
-        # Remove any rows with NaN values
-        stock_data = stock_data.dropna()
-        
-        return stock_data
+        data_dict = {}
+        for ticker in tickers:
+            # Create a Ticker object
+            stock = yf.Ticker( ticker )
+            
+            # Download historical data
+            stock_data = stock.history(
+                start = start_date,
+                end = end_date,
+                interval = "1d"
+            )
+            
+            if not stock_data.empty:
+                data_dict[ ticker ] = stock_data
+            
+        return data_dict
         
     except Exception as e:
         st.error( f"Error downloading data: { e }" )
-        return pd.DataFrame()
+        return {}
+
+def create_interactive_plot( data_dict, ma_period ):
+    """Create interactive plot with OHLC and MA for multiple tickers."""
+    
+    # Create figure with secondary y-axis
+    fig = make_subplots(
+        rows = len( data_dict ),
+        cols = 1,
+        subplot_titles = list( data_dict.keys() ),
+        vertical_spacing = 0.05,
+        specs = [ [ { "secondary_y": True } ] for _ in range( len( data_dict ) ) ]
+    )
+    
+    row = 1
+    signals = {}
+    
+    for ticker, data in data_dict.items():
+        # Calculate MA
+        data[ f'MA{ ma_period }' ] = data[ 'Close' ].rolling( window = ma_period ).mean()
+        
+        # Add candlestick
+        fig.add_trace(
+            go.Candlestick(
+                x = data.index,
+                open = data[ 'Open' ],
+                high = data[ 'High' ],
+                low = data[ 'Low' ],
+                close = data[ 'Close' ],
+                name = ticker,
+                showlegend = False
+            ),
+            row = row,
+            col = 1
+        )
+        
+        # Add MA line
+        fig.add_trace(
+            go.Scatter(
+                x = data.index,
+                y = data[ f'MA{ ma_period }' ],
+                name = f'{ ma_period }d MA',
+                line = dict( color = 'yellow' ),
+                showlegend = False
+            ),
+            row = row,
+            col = 1
+        )
+        
+        # Add volume bars
+        fig.add_trace(
+            go.Bar(
+                x = data.index,
+                y = data[ 'Volume' ],
+                name = 'Volume',
+                showlegend = False,
+                marker = dict(
+                    color = 'rgba(100, 100, 100, 0.3)'
+                )
+            ),
+            row = row,
+            col = 1,
+            secondary_y = True
+        )
+        
+        # Calculate signal
+        last_n_days = data.tail( ma_period )
+        days_below_ma = sum( last_n_days[ 'Close' ] < last_n_days[ f'MA{ ma_period }' ] )
+        latest_close = float( data[ 'Close' ].iloc[ -1 ] )
+        latest_ma = float( data[ f'MA{ ma_period }' ].iloc[ -1 ] )
+        
+        signals[ ticker ] = {
+            'signal': 'BUY' if days_below_ma < ma_period/2 else 'SELL',
+            'close': latest_close,
+            'ma': latest_ma
+        }
+        
+        row += 1
+    
+    # Update layout
+    fig.update_layout(
+        height = 300 * len( data_dict ),
+        title_text = "Stock Analysis Dashboard",
+        template = "plotly_dark",
+        xaxis_rangeslider_visible = False
+    )
+    
+    return fig, signals
 
 def main():
     st.set_page_config( page_title = "Stock Analysis Dashboard", layout = "wide" )
@@ -46,9 +123,17 @@ def main():
     st.title( "📈 Stock Analysis Dashboard" )
     st.markdown( "---" )
     
-    # Input Section - Each on its own line
-    ticker = st.text_input( "Enter Stock Ticker:", value = "AAPL" ).upper()
+    # Each input on its own line
+    ticker_input = st.text_input(
+        "Enter Stock Tickers (comma-separated):",
+        value = "AAPL, MSFT, GOOGL",
+        help = "Example: AAPL, MSFT, GOOGL, NVDA, AMZN"
+    ).upper()
     
+    # Convert input to list of tickers
+    tickers = [ ticker.strip() for ticker in ticker_input.split( ',' ) if ticker.strip() ]
+    
+    # Date inputs and MA slider each on their own line
     start_date = st.date_input(
         "Start Date",
         value = datetime.now() - timedelta( days = 365 )
@@ -59,7 +144,6 @@ def main():
         value = datetime.now()
     )
     
-    # Add moving average period selector
     ma_period = st.slider(
         "Moving Average Period (Days)",
         min_value = 5,
@@ -69,126 +153,89 @@ def main():
         help = "Select the number of days for the moving average calculation"
     )
     
-    chart_type = st.selectbox(
-        "Chart Type",
-        options = [ "line", "candle" ],
-        index = 0
-    )
-    
     st.markdown( "---" )
     
-    if ticker:
+    if tickers:
         try:
             # Load data
-            data = load_data( ticker, start_date, end_date )
+            data_dict = load_data( tickers, start_date, end_date )
             
-            if not data.empty:
-                # Calculate moving average with user-selected period
-                data[ f'MA{ ma_period }' ] = data[ 'Close' ].rolling( window = ma_period ).mean()
+            if data_dict:
+                # Create interactive plot
+                fig, signals = create_interactive_plot( data_dict, ma_period )
                 
-                # Get latest values for comparison
-                latest_close = float( data[ 'Close' ].iloc[ -1 ] )
-                latest_ma = float( data[ f'MA{ ma_period }' ].iloc[ -1 ] )
+                # Display signals in a grid
+                num_cols = min( len( tickers ), 4 )  # Maximum 4 columns
+                num_rows = ( len( tickers ) + num_cols - 1 ) // num_cols
                 
-                # Calculate how many days price was below MA
-                last_n_days = data.tail( ma_period )
-                days_below_ma = sum( last_n_days[ 'Close' ] < last_n_days[ f'MA{ ma_period }' ] )
+                for row in range( num_rows ):
+                    cols = st.columns( num_cols )
+                    for col in range( num_cols ):
+                        idx = row * num_cols + col
+                        if idx < len( tickers ):
+                            ticker = tickers[ idx ]
+                            if ticker in signals:
+                                signal_data = signals[ ticker ]
+                                with cols[ col ]:
+                                    if signal_data[ 'signal' ] == 'BUY':
+                                        st.success( 
+                                            f"{ ticker }\n"
+                                            f"Signal: BUY\n"
+                                            f"Price: ${ signal_data[ 'close' ]:.2f}\n"
+                                            f"MA{ ma_period }: ${ signal_data[ 'ma' ]:.2f}"
+                                        )
+                                    else:
+                                        st.error(
+                                            f"{ ticker }\n"
+                                            f"Signal: SELL\n"
+                                            f"Price: ${ signal_data[ 'close' ]:.2f}\n"
+                                            f"MA{ ma_period }: ${ signal_data[ 'ma' ]:.2f}"
+                                        )
                 
-                # Create signal message
-                if days_below_ma < ma_period/2:  # Less than half the days below MA
-                    st.success( "BUY Signal: Price (${:.2f}) is trending above {}-day MA (${:.2f})".format( 
-                        latest_close, ma_period, latest_ma 
-                    ) )
-                else:  # More than half the days below MA
-                    st.error( "SELL Signal: Price (${:.2f}) is trending below {}-day MA (${:.2f})".format( 
-                        latest_close, ma_period, latest_ma 
-                    ) )
+                # Display interactive plot
+                st.plotly_chart( fig, use_container_width = True )
                 
-                # Create the plot
-                mc = mpf.make_marketcolors(
-                    up = '#00ff00',
-                    down = '#ff0000',
-                    edge = 'inherit',
-                    wick = 'inherit',
-                    volume = 'in',
-                    ohlc = 'inherit'
-                )
-                
-                s = mpf.make_mpf_style(
-                    marketcolors = mc,
-                    gridstyle = '--',
-                    y_on_right = True,
-                    gridcolor = 'gray',
-                    facecolor = 'black',
-                    figcolor = 'black',
-                    gridaxis = 'both'
-                )
-                
-                # Create additional plot for MA
-                ma_plot = mpf.make_addplot( 
-                    data[ f'MA{ ma_period }' ],
-                    color = 'yellow',
-                    width = 1,
-                    label = f'{ ma_period }-day MA'
-                )
-                
-                # Plot the chart with MA
-                fig, ax = mpf.plot(
-                    data,
-                    type = chart_type,
-                    style = s,
-                    volume = True,
-                    returnfig = True,
-                    title = f'\n{ ticker } Stock Price with { ma_period }-day MA',
-                    figratio = ( 16, 8 ),
-                    figscale = 1.1,
-                    panel_ratios = ( 3, 1 ),
-                    addplot = ma_plot
-                )
-                
-                # Add legend
-                ax[ 0 ].legend( [ f'{ ma_period }-day MA' ] )
-                
-                st.pyplot( fig )
-                
-                # Statistics Section
-                col1, col2 = st.columns( 2 )
-                
-                with col1:
-                    st.subheader( "Recent Data" )
-                    st.dataframe( data.tail().style.format( {
-                        'Open': '${:.2f}',
-                        'High': '${:.2f}',
-                        'Low': '${:.2f}',
-                        'Close': '${:.2f}',
-                        'Volume': '{:,.0f}'
-                    } ) )
-                
-                with col2:
-                    st.subheader( "Summary Statistics" )
-                    summary = pd.DataFrame({
-                        'Metric': [
-                            'Current Price',
-                            'Daily Change',
-                            'Volume',
-                            'Year High',
-                            'Year Low'
-                        ],
-                        'Value': [
-                            f"${ data[ 'Close' ].iloc[ -1 ]:.2f}",
-                            f"{ ( ( data[ 'Close' ].iloc[ -1 ] - data[ 'Close' ].iloc[ -2 ] ) / data[ 'Close' ].iloc[ -2 ] * 100 ):.2f}%",
-                            f"{ int( data[ 'Volume' ].iloc[ -1 ] ):,}",
-                            f"${ data[ 'High' ].max():.2f}",
-                            f"${ data[ 'Low' ].min():.2f}"
-                        ]
-                    })
-                    st.dataframe( summary, hide_index = True )
-                
+                # Display statistics in expandable sections
+                for ticker, data in data_dict.items():
+                    with st.expander( f"{ ticker } Statistics" ):
+                        col1, col2 = st.columns( 2 )
+                        
+                        with col1:
+                            st.subheader( "Recent OHLCV Data" )
+                            st.dataframe( data.tail().style.format( {
+                                'Open': '${:.2f}',
+                                'High': '${:.2f}',
+                                'Low': '${:.2f}',
+                                'Close': '${:.2f}',
+                                'Volume': '{:,.0f}'
+                            } ) )
+                        
+                        with col2:
+                            st.subheader( "Summary" )
+                            summary = pd.DataFrame({
+                                'Metric': [
+                                    'Current Price',
+                                    f'{ ma_period }-day MA',
+                                    'Daily Change',
+                                    'Volume',
+                                    'Year High',
+                                    'Year Low'
+                                ],
+                                'Value': [
+                                    f"${ data[ 'Close' ].iloc[ -1 ]:.2f}",
+                                    f"${ data[ f'MA{ ma_period }' ].iloc[ -1 ]:.2f}",
+                                    f"{ ( ( data[ 'Close' ].iloc[ -1 ] - data[ 'Close' ].iloc[ -2 ] ) / data[ 'Close' ].iloc[ -2 ] * 100 ):.2f}%",
+                                    f"{ int( data[ 'Volume' ].iloc[ -1 ] ):,}",
+                                    f"${ data[ 'High' ].max():.2f}",
+                                    f"${ data[ 'Low' ].min():.2f}"
+                                ]
+                            })
+                            st.dataframe( summary, hide_index = True )
             else:
-                st.warning( "No data available for the selected date range" )
+                st.warning( "No data available for the selected tickers and date range" )
                 
         except Exception as e:
-            st.error( f"Error: { str( e ) }. Please check if the ticker symbol is correct." )
+            st.error( f"Error: { str( e ) }. Please check if the ticker symbols are correct." )
 
 if __name__ == "__main__":
     main()
