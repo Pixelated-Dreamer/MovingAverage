@@ -21,9 +21,12 @@ wheels/
 .installed.cfg
 *.egg
 
+# Streamlit
+.streamlit/secrets.toml
+
 # Virtual Environment
 venv/
-ENV/
+.env
 
 # IDE
 .idea/
@@ -31,8 +34,14 @@ ENV/
 *.swp
 *.swo
 
-# Streamlit
-.streamlit/secrets.toml
+# Operating System
+.DS_Store
+Thumbs.db
+
+# Project specific
+*.csv
+*.xlsx
+*.json
 
 # OS
 .DS_Store
