@@ -1,5 +1,15 @@
+# Core dependencies
 streamlit==1.31.1
 yfinance==0.2.36
 pandas==2.2.0
-mplfinance==0.12.10b0
-matplotlib==3.8.2
+numpy==1.26.3
+
+# Plotting
+plotly==5.18.0
+
+# Data handling
+python-dateutil==2.8.2
+pytz==2024.1
+
+# Optional - for better performance
+streamlit-cache-data==0.1.0
