@@ -23,12 +23,23 @@ def calculate_signals( data, short_window, long_window, initial_investment ):
     # Generate signals
     data[ 'signal' ] = np.where( data[ 'short_ma' ] > data[ 'long_ma' ], 'BUY', 'SELL' )
     
-    # Track portfolio value
+    # Track portfolio value and position
     current_value = initial_investment
+    current_position = 0
     signals_with_dates = []
     
     for i in range( len( data ) ):
-        if i > 0:  # Skip first day since we can't calculate returns yet
+        # Update position based on signal
+        if i > 0:
+            prev_signal = data[ 'signal' ].iloc[ i - 1 ]
+            current_signal = data[ 'signal' ].iloc[ i ]
+            
+            if prev_signal == 'SELL' and current_signal == 'BUY':
+                current_position = 1  # Buy one stock
+            elif prev_signal == 'BUY' and current_signal == 'SELL':
+                current_position = 0  # Sell the stock
+            
+            # Calculate portfolio value
             prev_price = data[ 'Close' ].iloc[ i - 1 ]
             price_change = ( data[ 'Close' ].iloc[ i ] - prev_price ) / prev_price
             if data[ 'signal' ].iloc[ i - 1 ] == 'BUY':
@@ -40,6 +51,7 @@ def calculate_signals( data, short_window, long_window, initial_investment ):
             'date': data.index[ i ].strftime( '%Y-%m-%d' ),
             'signal': data[ 'signal' ].iloc[ i ],
             'price': data[ 'Close' ].iloc[ i ],
+            'position': current_position,
             'portfolio_value': round( current_value, 2 )
         })
 
@@ -126,8 +138,9 @@ def main():
                     
                     if signal_history:
                         df = pd.DataFrame( signal_history )
-                        df.columns = [ 'Date', 'Signal', 'Price', 'Portfolio Value' ]
+                        df.columns = [ 'Date', 'Signal', 'Price', 'Position', 'Portfolio Value' ]
                         df[ 'Price' ] = df[ 'Price' ].round( 2 )
+                        df[ 'Position' ] = df[ 'Position' ].map( lambda x: 'Holding' if x == 1 else 'Not Holding' )
                         df[ 'Portfolio Value' ] = df[ 'Portfolio Value' ].map( lambda x: f'${ x:,.2f}' )
                         
                         def color_signal( val ):
@@ -203,7 +216,7 @@ def main():
                     f'{ short_window }d MA': data[ 'Close' ].rolling( window = short_window ).mean(),
                     f'{ long_window }d MA': data[ 'Close' ].rolling( window = long_window ).mean()
                 })
-                st.line_chart( chart_data, height = 1000 )  # Changed from 500 to 1000
+                st.line_chart( chart_data, height = 800 )  # Changed to 800
                 st.markdown( "---" )  # Add separator between charts
                     
         except Exception as e:
