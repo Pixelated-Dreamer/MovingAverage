@@ -1,241 +1,203 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+import numpy as np
 from datetime import datetime, timedelta
 
-def load_data( tickers, start_date, end_date ):
-    """Load and clean stock data for multiple tickers."""
+def fetch_stock_data( ticker, start_date, end_date ):
+    """Fetch stock data from Yahoo Finance."""
     try:
-        data_dict = {}
-        for ticker in tickers:
-            # Create a Ticker object
-            stock = yf.Ticker( ticker )
-            
-            # Download historical data
-            stock_data = stock.history(
-                start = start_date,
-                end = end_date,
-                interval = "1d"
-            )
-            
-            if not stock_data.empty:
-                data_dict[ ticker ] = stock_data
-            
-        return data_dict
-        
+        stock = yf.Ticker( ticker )
+        data = stock.history( start = start_date, end = end_date )
+        return data
     except Exception as e:
-        st.error( f"Error downloading data: { e }" )
-        return {}
+        st.error( f"Error fetching data for { ticker }: { str( e ) }" )
+        return None
 
-def create_interactive_plot( data_dict, ma_period ):
-    """Create interactive plot with OHLC and MA for multiple tickers."""
+def calculate_signals( data, short_window, long_window ):
+    """Calculate moving average signals with dates."""
+    data[ 'short_ma' ] = data[ 'Close' ].rolling( window = short_window ).mean()
+    data[ 'long_ma' ] = data[ 'Close' ].rolling( window = long_window ).mean()
     
-    # Create figure with secondary y-axis
-    fig = make_subplots(
-        rows = len( data_dict ),
-        cols = 1,
-        subplot_titles = list( data_dict.keys() ),
-        vertical_spacing = 0.05,
-        specs = [ [ { "secondary_y": True } ] for _ in range( len( data_dict ) ) ]
-    )
+    # Generate signals
+    data[ 'signal' ] = np.where( data[ 'short_ma' ] > data[ 'long_ma' ], 'BUY', 'SELL' )
     
-    row = 1
-    signals = {}
+    # Detect signal changes
+    data[ 'signal_change' ] = data[ 'signal' ] != data[ 'signal' ].shift( 1 )
+    signal_dates = data[data[ 'signal_change' ]].index
+    
+    signals_with_dates = []
+    for date in signal_dates:
+        signals_with_dates.append({
+            'date': date.strftime( '%Y-%m-%d' ),
+            'signal': data.loc[date, 'signal'],
+            'price': data.loc[date, 'Close']
+        })
+    
+    return {
+        'close': data[ 'Close' ].iloc[ -1 ],
+        'ma': data[ 'long_ma' ].iloc[ -1 ],
+        'signal': data[ 'signal' ].iloc[ -1 ],
+        'history': signals_with_dates
+    }
+
+def calculate_returns( data_dict, signals, initial_investment = 1000 ):
+    """Calculate returns based on trading signals."""
+    portfolio_results = {}
     
     for ticker, data in data_dict.items():
-        # Calculate MA
-        data[ f'MA{ ma_period }' ] = data[ 'Close' ].rolling( window = ma_period ).mean()
+        signal_data = signals[ ticker ]
         
-        # Add candlestick
-        fig.add_trace(
-            go.Candlestick(
-                x = data.index,
-                open = data[ 'Open' ],
-                high = data[ 'High' ],
-                low = data[ 'Low' ],
-                close = data[ 'Close' ],
-                name = ticker,
-                showlegend = False
-            ),
-            row = row,
-            col = 1
-        )
+        # Calculate percentage change from MA crossover
+        price_change = ( signal_data[ 'close' ] - signal_data[ 'ma' ] ) / signal_data[ 'ma' ]
         
-        # Add MA line
-        fig.add_trace(
-            go.Scatter(
-                x = data.index,
-                y = data[ f'MA{ ma_period }' ],
-                name = f'{ ma_period }d MA',
-                line = dict( color = 'yellow' ),
-                showlegend = False
-            ),
-            row = row,
-            col = 1
-        )
+        # Calculate returns based on signal
+        if signal_data[ 'signal' ] == 'BUY':
+            returns = initial_investment * ( 1 + price_change )
+        else:  # SELL signal
+            returns = initial_investment * ( 1 - price_change )
+            
+        profit = returns - initial_investment
+        roi = ( ( returns - initial_investment ) / initial_investment ) * 100
         
-        # Add volume bars
-        fig.add_trace(
-            go.Bar(
-                x = data.index,
-                y = data[ 'Volume' ],
-                name = 'Volume',
-                showlegend = False,
-                marker = dict(
-                    color = 'rgba(100, 100, 100, 0.3)'
-                )
-            ),
-            row = row,
-            col = 1,
-            secondary_y = True
-        )
-        
-        # Calculate signal
-        last_n_days = data.tail( ma_period )
-        days_below_ma = sum( last_n_days[ 'Close' ] < last_n_days[ f'MA{ ma_period }' ] )
-        latest_close = float( data[ 'Close' ].iloc[ -1 ] )
-        latest_ma = float( data[ f'MA{ ma_period }' ].iloc[ -1 ] )
-        
-        signals[ ticker ] = {
-            'signal': 'BUY' if days_below_ma < ma_period/2 else 'SELL',
-            'close': latest_close,
-            'ma': latest_ma
+        portfolio_results[ ticker ] = {
+            'initial_investment': initial_investment,
+            'final_value': returns,
+            'profit': profit,
+            'roi': roi
         }
-        
-        row += 1
     
-    # Update layout
-    fig.update_layout(
-        height = 300 * len( data_dict ),
-        title_text = "Stock Analysis Dashboard",
-        template = "plotly_dark",
-        xaxis_rangeslider_visible = False
-    )
-    
-    return fig, signals
+    return portfolio_results
 
 def main():
-    st.set_page_config( page_title = "Stock Analysis Dashboard", layout = "wide" )
+    st.title( "📈 Stock Moving Average Backtester" )
     
-    # Header
-    st.title( "📈 Stock Analysis Dashboard" )
-    st.markdown( "---" )
+    # Single line inputs
+    today = datetime.today()
+    default_start = today - timedelta( days = 365 )
+    start_date = st.date_input( "Start Date", default_start )
+    end_date = st.date_input( "End Date", today )
+    short_window = st.number_input( "Short MA Window", 5, 100, 20 )
+    long_window = st.number_input( "Long MA Window", 20, 200, 50 )
+    ticker_input = st.text_input( "Enter Stock Tickers (comma-separated)", "AAPL, MSFT, GOOGL" )
     
-    # Each input on its own line
-    ticker_input = st.text_input(
-        "Enter Stock Tickers (comma-separated):",
-        value = "AAPL, MSFT, GOOGL",
-        help = "Example: AAPL, MSFT, GOOGL, NVDA, AMZN"
-    ).upper()
-    
-    # Convert input to list of tickers
-    tickers = [ ticker.strip() for ticker in ticker_input.split( ',' ) if ticker.strip() ]
-    
-    # Date inputs and MA slider each on their own line
-    start_date = st.date_input(
-        "Start Date",
-        value = datetime.now() - timedelta( days = 365 )
-    )
-    
-    end_date = st.date_input(
-        "End Date",
-        value = datetime.now()
-    )
-    
-    ma_period = st.slider(
-        "Moving Average Period (Days)",
-        min_value = 5,
-        max_value = 200,
-        value = 30,
-        step = 5,
-        help = "Select the number of days for the moving average calculation"
-    )
-    
-    st.markdown( "---" )
+    tickers = [ticker.strip() for ticker in ticker_input.split( "," )]
     
     if tickers:
         try:
-            # Load data
-            data_dict = load_data( tickers, start_date, end_date )
+            # Fetch data for all tickers
+            data_dict = {}
+            signals = {}
             
-            if data_dict:
-                # Create interactive plot
-                fig, signals = create_interactive_plot( data_dict, ma_period )
-                
-                # Display signals in a grid
-                num_cols = min( len( tickers ), 4 )  # Maximum 4 columns
-                num_rows = ( len( tickers ) + num_cols - 1 ) // num_cols
-                
-                for row in range( num_rows ):
-                    cols = st.columns( num_cols )
-                    for col in range( num_cols ):
-                        idx = row * num_cols + col
-                        if idx < len( tickers ):
-                            ticker = tickers[ idx ]
-                            if ticker in signals:
-                                signal_data = signals[ ticker ]
-                                with cols[ col ]:
-                                    if signal_data[ 'signal' ] == 'BUY':
-                                        st.success( 
-                                            f"{ ticker }\n"
-                                            f"Signal: BUY\n"
-                                            f"Price: ${ signal_data[ 'close' ]:.2f}\n"
-                                            f"MA{ ma_period }: ${ signal_data[ 'ma' ]:.2f}"
-                                        )
-                                    else:
-                                        st.error(
-                                            f"{ ticker }\n"
-                                            f"Signal: SELL\n"
-                                            f"Price: ${ signal_data[ 'close' ]:.2f}\n"
-                                            f"MA{ ma_period }: ${ signal_data[ 'ma' ]:.2f}"
-                                        )
-                
-                # Display interactive plot
-                st.plotly_chart( fig, use_container_width = True )
-                
-                # Display statistics in expandable sections
-                for ticker, data in data_dict.items():
-                    with st.expander( f"{ ticker } Statistics" ):
-                        col1, col2 = st.columns( 2 )
+            for ticker in tickers:
+                data = fetch_stock_data( ticker, start_date, end_date )
+                if data is not None:
+                    data_dict[ ticker ] = data
+                    signals[ ticker ] = calculate_signals( data, short_window, long_window )
+            
+            # Signal History Tables in a row
+            st.markdown( "---" )
+            st.subheader( "📋 Signal History" )
+            
+            # Create columns for each ticker's signal table
+            signal_cols = st.columns( len( tickers ) )
+            
+            for idx, ticker in enumerate( tickers ):
+                with signal_cols[ idx ]:
+                    st.write( f"### { ticker }" )
+                    signal_history = signals[ ticker ][ 'history' ]
+                    
+                    if signal_history:
+                        df = pd.DataFrame( signal_history )
+                        df.columns = [ 'Date', 'Signal', 'Price' ]
+                        df[ 'Price' ] = df[ 'Price' ].round( 2 )
                         
-                        with col1:
-                            st.subheader( "Recent OHLCV Data" )
-                            st.dataframe( data.tail().style.format( {
-                                'Open': '${:.2f}',
-                                'High': '${:.2f}',
-                                'Low': '${:.2f}',
-                                'Close': '${:.2f}',
-                                'Volume': '{:,.0f}'
-                            } ) )
+                        def color_signal( val ):
+                            color = 'green' if val == 'BUY' else 'red'
+                            return f'color: { color }'
                         
-                        with col2:
-                            st.subheader( "Summary" )
-                            summary = pd.DataFrame({
-                                'Metric': [
-                                    'Current Price',
-                                    f'{ ma_period }-day MA',
-                                    'Daily Change',
-                                    'Volume',
-                                    'Year High',
-                                    'Year Low'
-                                ],
-                                'Value': [
-                                    f"${ data[ 'Close' ].iloc[ -1 ]:.2f}",
-                                    f"${ data[ f'MA{ ma_period }' ].iloc[ -1 ]:.2f}",
-                                    f"{ ( ( data[ 'Close' ].iloc[ -1 ] - data[ 'Close' ].iloc[ -2 ] ) / data[ 'Close' ].iloc[ -2 ] * 100 ):.2f}%",
-                                    f"{ int( data[ 'Volume' ].iloc[ -1 ] ):,}",
-                                    f"${ data[ 'High' ].max():.2f}",
-                                    f"${ data[ 'Low' ].min():.2f}"
-                                ]
-                            })
-                            st.dataframe( summary, hide_index = True )
-            else:
-                st.warning( "No data available for the selected tickers and date range" )
-                
+                        st.dataframe(
+                            df.style.applymap(
+                                color_signal,
+                                subset = [ 'Signal' ]
+                            )
+                        )
+                    else:
+                        st.write( "No signal changes in the selected period" )
+            
+            # Backtesting section
+            st.markdown( "---" )
+            st.subheader( "📊 Backtesting Results" )
+    
+            initial_investment = st.number_input(
+                "Initial Investment ($)",
+                min_value = 100,
+                max_value = 1000000,
+                value = 1000,
+                step = 100
+            )
+            
+            portfolio_results = calculate_returns( data_dict, signals, initial_investment )
+            
+            # Display results in a grid
+            cols = st.columns( len( tickers ) )
+            for idx, ( ticker, results ) in enumerate( portfolio_results.items() ):
+                with cols[ idx ]:
+                    st.metric(
+                        label = f"{ ticker } Returns",
+                        value = f"${ results[ 'final_value' ]:.2f}",
+                        delta = f"{ results[ 'roi' ]:.2f}%"
+                    )
+                    
+                    st.write( f"Initial Investment: ${ results[ 'initial_investment' ]:.2f}" )
+                    st.write( f"Profit/Loss: ${ results[ 'profit' ]:.2f}" )
+            
+            # Calculate total portfolio metrics
+            total_investment = sum( r[ 'initial_investment' ] for r in portfolio_results.values() )
+            total_final = sum( r[ 'final_value' ] for r in portfolio_results.values() )
+            total_profit = total_final - total_investment
+            total_roi = ( ( total_final - total_investment ) / total_investment ) * 100
+            
+            st.markdown( "---" )
+            st.subheader( "📈 Total Portfolio Performance" )
+            col1, col2, col3 = st.columns( 3 )
+            
+            with col1:
+                st.metric(
+                    label = "Total Investment",
+                    value = f"${ total_investment:.2f}"
+                )
+            
+            with col2:
+                st.metric(
+                    label = "Total Current Value",
+                    value = f"${ total_final:.2f}",
+                    delta = f"{ total_roi:.2f}%"
+                )
+            
+            with col3:
+                st.metric(
+                    label = "Total Profit/Loss",
+                    value = f"${ total_profit:.2f}"
+                )
+            
+            # Display charts stacked
+            st.markdown( "---" )
+            st.subheader( "📊 Price Charts" )
+            
+            for ticker, data in data_dict.items():
+                st.write( f"### { ticker }" )
+                chart_data = pd.DataFrame({
+                    'Price': data[ 'Close' ],
+                    f'{ short_window }d MA': data[ 'Close' ].rolling( window = short_window ).mean(),
+                    f'{ long_window }d MA': data[ 'Close' ].rolling( window = long_window ).mean()
+                })
+                st.line_chart( chart_data )
+                st.markdown( "---" )  # Add separator between charts
+                    
         except Exception as e:
-            st.error( f"Error: { str( e ) }. Please check if the ticker symbols are correct." )
+            st.error( f"An error occurred: { str( e ) }" )
 
 if __name__ == "__main__":
     main()
+
