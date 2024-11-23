@@ -10,6 +10,3 @@ plotly==5.18.0
 # Data handling
 python-dateutil==2.8.2
 pytz==2024.1
-
-# Optional - for better performance
-streamlit-cache-data==0.1.0
