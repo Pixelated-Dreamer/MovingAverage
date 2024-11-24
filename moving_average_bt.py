@@ -282,7 +282,7 @@ def main():
     st.markdown(
         """
         <div style='text-align: center; color: #666; padding: 20px;'>
-            Made with ❤️ by <a href='https://github.com/PixelCatt' style='color: #ff69b4; text-decoration: none;'>pixelcatt</a>
+            Made with ❤️ by <a href='https://github.com/Pixelated-Dreamer' style='color: #ff69b4; text-decoration: none;'>pixelcatt</a>
         </div>
         """,
         unsafe_allow_html = True
