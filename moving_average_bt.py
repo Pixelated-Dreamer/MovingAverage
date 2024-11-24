@@ -277,6 +277,17 @@ def main():
         except Exception as e:
             st.error( f"An error occurred: { str( e ) }" )
 
+    # Add this at the very end of the main() function, after all other content
+    st.markdown( "---" )
+    st.markdown(
+        """
+        <div style='text-align: center; color: #666; padding: 20px;'>
+            Made with ❤️ by <a href='https://github.com/PixelatedDreamer' style='color: #ff69b4; text-decoration: none;'>pixelcatt</a>
+        </div>
+        """,
+        unsafe_allow_html = True
+    )
+
 if __name__ == "__main__":
     main()
 
