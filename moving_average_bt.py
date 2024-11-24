@@ -3,6 +3,8 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+import plotly.graph_objects as go
+
 st.set_page_config( layout = "wide" )
 
 def fetch_stock_data( ticker, start_date, end_date ):
@@ -20,46 +22,56 @@ def calculate_signals( data, short_window, long_window, initial_investment ):
     data[ 'short_ma' ] = data[ 'Close' ].rolling( window = short_window ).mean()
     data[ 'long_ma' ] = data[ 'Close' ].rolling( window = long_window ).mean()
     
-    # Generate signals
-    data[ 'signal' ] = np.where( data[ 'short_ma' ] > data[ 'long_ma' ], 'BUY', 'SELL' )
-    
     # Track portfolio value and position
     current_value = initial_investment
     current_position = 0
     signals_with_dates = []
     
     for i in range( len( data ) ):
-        # Update position based on signal
         if i > 0:
-            prev_signal = data[ 'signal' ].iloc[ i - 1 ]
-            current_signal = data[ 'signal' ].iloc[ i ]
+            # Check if price crosses moving averages
+            price = data[ 'Close' ].iloc[ i ]
+            short_ma = data[ 'short_ma' ].iloc[ i ]
+            long_ma = data[ 'long_ma' ].iloc[ i ]
             
-            if prev_signal == 'SELL' and current_signal == 'BUY':
-                current_position = 1  # Buy one stock
-            elif prev_signal == 'BUY' and current_signal == 'SELL':
-                current_position = 0  # Sell the stock
+            # Calculate distance to moving averages
+            distance_to_short = abs( price - short_ma ) / price
+            distance_to_long = abs( price - long_ma ) / price
+            threshold = 0.001  # 0.1% threshold for "touching" MA
+            
+            # Only record when there's a trade
+            if distance_to_short <= threshold or distance_to_long <= threshold:
+                if short_ma > long_ma and current_position == 0:
+                    current_position = 1
+                    signals_with_dates.append({
+                        'date': data.index[ i ].strftime( '%Y-%m-%d' ),
+                        'signal': 'BUY',
+                        'price': data[ 'Close' ].iloc[ i ],
+                        'position': current_position,
+                        'portfolio_value': round( current_value, 2 )
+                    })
+                elif short_ma < long_ma and current_position == 1:
+                    current_position = 0
+                    signals_with_dates.append({
+                        'date': data.index[ i ].strftime( '%Y-%m-%d' ),
+                        'signal': 'SELL',
+                        'price': data[ 'Close' ].iloc[ i ],
+                        'position': current_position,
+                        'portfolio_value': round( current_value, 2 )
+                    })
             
             # Calculate portfolio value
             prev_price = data[ 'Close' ].iloc[ i - 1 ]
-            price_change = ( data[ 'Close' ].iloc[ i ] - prev_price ) / prev_price
-            if data[ 'signal' ].iloc[ i - 1 ] == 'BUY':
+            price_change = ( price - prev_price ) / prev_price
+            if current_position == 1:  # Only apply returns when holding position
                 current_value *= ( 1 + price_change )
-            else:
-                current_value *= ( 1 - price_change )
-        
-        signals_with_dates.append({
-            'date': data.index[ i ].strftime( '%Y-%m-%d' ),
-            'signal': data[ 'signal' ].iloc[ i ],
-            'price': data[ 'Close' ].iloc[ i ],
-            'position': current_position,
-            'portfolio_value': round( current_value, 2 )
-        })
 
     return {
         'close': data[ 'Close' ].iloc[ -1 ],
         'ma': data[ 'long_ma' ].iloc[ -1 ],
-        'signal': data[ 'signal' ].iloc[ -1 ],
-        'history': signals_with_dates
+        'signal': signals_with_dates[ -1 ][ 'signal' ] if signals_with_dates else 'HOLD',
+        'history': signals_with_dates,
+        'data': data
     }
 
 def calculate_returns( data_dict, signals, initial_investment = 1000 ):
@@ -144,15 +156,18 @@ def main():
                         df[ 'Portfolio Value' ] = df[ 'Portfolio Value' ].map( lambda x: f'${ x:,.2f}' )
                         
                         def color_signal( val ):
-                            color = 'green' if val == 'BUY' else 'red'
-                            return f'color: { color }'
+                            if val == 'BUY':
+                                return 'color: green'
+                            elif val == 'SELL':
+                                return 'color: red'
+                            return ''
                         
                         st.dataframe(
                             df.style.applymap(
                                 color_signal,
                                 subset = [ 'Signal' ]
                             ),
-                            height = 400  # Make the table taller
+                            height = 400
                         )
                     else:
                         st.write( "No signal changes in the selected period" )
@@ -211,12 +226,52 @@ def main():
             
             for ticker, data in data_dict.items():
                 st.write( f"### { ticker }" )
-                chart_data = pd.DataFrame({
-                    'Price': data[ 'Close' ],
-                    f'{ short_window }d MA': data[ 'Close' ].rolling( window = short_window ).mean(),
-                    f'{ long_window }d MA': data[ 'Close' ].rolling( window = long_window ).mean()
-                })
-                st.line_chart( chart_data, height = 800 )  # Changed to 800
+                
+                # Create candlestick figure
+                fig = go.Figure()
+                
+                # Add candlestick
+                fig.add_trace(
+                    go.Candlestick(
+                        x = data.index,
+                        open = data[ 'Open' ],
+                        high = data[ 'High' ],
+                        low = data[ 'Low' ],
+                        close = data[ 'Close' ],
+                        name = 'Price'
+                    )
+                )
+                
+                # Add moving averages
+                fig.add_trace(
+                    go.Scatter(
+                        x = data.index,
+                        y = data[ 'Close' ].rolling( window = short_window ).mean(),
+                        name = f'{ short_window }d MA',
+                        line = dict( color = 'orange' )
+                    )
+                )
+                
+                fig.add_trace(
+                    go.Scatter(
+                        x = data.index,
+                        y = data[ 'Close' ].rolling( window = long_window ).mean(),
+                        name = f'{ long_window }d MA',
+                        line = dict( color = 'blue' )
+                    )
+                )
+                
+                # Update layout
+                fig.update_layout(
+                    height = 800,
+                    title = f"{ ticker } Price Chart",
+                    yaxis_title = "Price",
+                    xaxis_title = "Date",
+                    template = "plotly_white"
+                )
+                
+                # Display the plot
+                st.plotly_chart( fig, use_container_width = True )
                 st.markdown( "---" )  # Add separator between charts
                     
         except Exception as e:
